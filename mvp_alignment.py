@@ -187,6 +187,7 @@ CONT_ALGOS = {
 # -----------------------------
 # Combinatorial benchmark: TSP instances
 # -----------------------------
+
 def tsp_generate(n: int, kind: str, rng) -> np.ndarray:
     """
     Returns coords [n,2] in [0,1]^2
@@ -701,3 +702,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
