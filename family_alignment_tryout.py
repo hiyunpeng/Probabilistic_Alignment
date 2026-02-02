@@ -1,44 +1,33 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Family Alignment Tryout v2
-==========================
+Family Alignment Tryout v3 (improved competitiveness + robust membership)
 
-Purpose
--------
-Empirically test whether certain "bestial" metaheuristics behave like the PSO family
-or the Evolution family using repeated runs and probabilistic signatures.
+Key Improvements vs v2
+----------------------
+A) Fix under-test algorithms' schedules (GWO/WOA/MFO/ALO):
+   - max_iter tied to eval budget (evalf.budget // pop), so 'a' and shrink schedules actually progress.
 
-What you get (three parallel signals)
--------------------------------------
-1) Top-1 wins (Dirichlet posterior):
-   - counts how often each algorithm is the best within each problem bucket.
-2) Top-k hits (Beta posterior, default k=3):
-   - counts how often each algorithm lands in top-k within each bucket.
-3) Shape-based profile similarity (bootstrap):
-   - uses normalized-regret performance profiles ("where it works") rather than only #1 wins.
+B) Add rank-based profile membership (ShapeRank), more robust than regret normalization.
 
-Buckets / Groups
-----------------
-group = function × dim_bin × budget_tier
+C) Add evidence gating:
+   - If algorithm has too few Top-k hits AND too few Top-1 wins, label as INSUFFICIENT.
+   - Avoid over-interpreting algorithms that are consistently non-competitive.
 
 Outputs
 -------
 out_dir/
-  - runs.csv
-  - instance_summary.csv
-  - wins_by_group_top1.csv
-  - hits_by_group_top{k}.csv
-  - membership.csv  (Top1 + Topk + Shape membership)
+  runs.csv
+  instance_summary.csv
+  wins_by_group_top1.csv
+  hits_by_group_top{k}.csv
+  membership.csv  (Top1 + Topk + ShapeRegret + ShapeRank + Combined + status)
 
-Dependencies
-------------
-- numpy only
+Dependencies: numpy only
 
 Run
 ---
 python family_alignment_tryout.py all --out_dir out --topk 3
-python family_alignment_tryout.py analyze --out_dir out --topk 3
 """
 
 from __future__ import annotations
@@ -75,7 +64,6 @@ def js_divergence(p: np.ndarray, q: np.ndarray, eps: float = 1e-12) -> float:
 
 
 def cosine_sim(a: np.ndarray, b: np.ndarray, eps: float = 1e-12) -> float:
-    """Cosine similarity."""
     na = float(np.linalg.norm(a))
     nb = float(np.linalg.norm(b))
     if na < eps or nb < eps:
@@ -122,13 +110,11 @@ class EvalCounter:
 
 
 def dirichlet_samples(counts: np.ndarray, alpha0: float, n_mc: int, rng: np.random.Generator) -> np.ndarray:
-    """Dirichlet(alpha0 + counts)."""
     alpha = counts.astype(float) + float(alpha0)
     return rng.dirichlet(alpha, size=n_mc)  # [n_mc, K]
 
 
 def beta_samples(success: int, total: int, alpha0: float, n_mc: int, rng: np.random.Generator) -> np.ndarray:
-    """Beta(alpha0+success, alpha0+total-success)."""
     a = float(alpha0 + success)
     b = float(alpha0 + (total - success))
     return rng.beta(a, b, size=n_mc)  # [n_mc]
@@ -143,7 +129,6 @@ def f_sphere(z: np.ndarray) -> float:
 
 
 def f_rosenbrock(z: np.ndarray) -> float:
-    # standard Rosenbrock has optimum at ones; shift inside for convenience
     y = z + 1.0
     return float(np.sum(100.0 * (y[1:] - y[:-1] ** 2) ** 2 + (1.0 - y[:-1]) ** 2))
 
@@ -184,9 +169,9 @@ class Instance:
     instance_id: str
     func: str
     dim: int
-    bounds: np.ndarray  # [d,2]
-    shift: np.ndarray   # [d]
-    rot: np.ndarray     # [d,d]
+    bounds: np.ndarray
+    shift: np.ndarray
+    rot: np.ndarray
 
     def make_objective(self):
         base = FUNC_MAP[self.func]
@@ -210,21 +195,12 @@ def make_instances(funcs: List[str], dims: List[int], n_per_cell: int, master_se
                 shift = rng.uniform(bounds[:, 0], bounds[:, 1])
                 rot = make_rotation_matrix(d, rng)
                 iid = f"{fn}_d{d}_i{k:03d}"
-                instances.append(
-                    Instance(
-                        instance_id=iid,
-                        func=fn,
-                        dim=d,
-                        bounds=bounds,
-                        shift=shift,
-                        rot=rot,
-                    )
-                )
+                instances.append(Instance(iid, fn, d, bounds, shift, rot))
     return instances
 
 
 # ============================================================
-# Algorithms (anchors + under-test)
+# Algorithms
 # ============================================================
 
 # -------- PSO anchors --------
@@ -233,7 +209,6 @@ def pso_standard(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Generato
     lo, hi = bounds[:, 0], bounds[:, 1]
     X = rng.uniform(lo, hi, size=(pop, d))
     V = rng.normal(scale=0.1, size=(pop, d))
-
     pbest = X.copy()
     pbest_y = np.array([evalf(X[i]) for i in range(pop)], dtype=float)
     gbest = pbest[int(np.argmin(pbest_y))].copy()
@@ -244,7 +219,6 @@ def pso_standard(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Generato
         r2 = rng.random((pop, d))
         V = w * V + c1 * r1 * (pbest - X) + c2 * r2 * (gbest - X)
         X = clamp(X + V, lo, hi)
-
         y = np.array([evalf(X[i]) for i in range(pop)], dtype=float)
         improved = y < pbest_y
         pbest[improved] = X[improved]
@@ -255,25 +229,21 @@ def pso_standard(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Generato
 
 
 def pso_constriction(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Generator, pop: int = 30):
-    # Clerc constriction PSO (common anchor)
     d = bounds.shape[0]
     lo, hi = bounds[:, 0], bounds[:, 1]
     X = rng.uniform(lo, hi, size=(pop, d))
     V = rng.normal(scale=0.1, size=(pop, d))
-
     pbest = X.copy()
     pbest_y = np.array([evalf(X[i]) for i in range(pop)], dtype=float)
     gbest = pbest[int(np.argmin(pbest_y))].copy()
 
     chi = 0.7298
     c1, c2 = 1.49618, 1.49618
-
     while evalf.remaining() >= pop:
         r1 = rng.random((pop, d))
         r2 = rng.random((pop, d))
         V = chi * (V + c1 * r1 * (pbest - X) + c2 * r2 * (gbest - X))
         X = clamp(X + V, lo, hi)
-
         y = np.array([evalf(X[i]) for i in range(pop)], dtype=float)
         improved = y < pbest_y
         pbest[improved] = X[improved]
@@ -284,12 +254,10 @@ def pso_constriction(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Gene
 
 
 def pso_ring(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Generator, pop: int = 30):
-    # Ring topology PSO
     d = bounds.shape[0]
     lo, hi = bounds[:, 0], bounds[:, 1]
     X = rng.uniform(lo, hi, size=(pop, d))
     V = rng.normal(scale=0.1, size=(pop, d))
-
     pbest = X.copy()
     pbest_y = np.array([evalf(X[i]) for i in range(pop)], dtype=float)
 
@@ -309,7 +277,6 @@ def pso_ring(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Generator, p
             r2 = rng.random(d)
             V[i] = w * V[i] + c1 * r1 * (pbest[i] - X[i]) + c2 * r2 * (nb - X[i])
             X[i] = clamp(X[i] + V[i], lo, hi)
-
         y = np.array([evalf(X[i]) for i in range(pop)], dtype=float)
         improved = y < pbest_y
         pbest[improved] = X[improved]
@@ -332,15 +299,12 @@ def de_rand_1_bin(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Generat
                 break
             idxs = [j for j in range(pop) if j != i]
             a, b, c = rng.choice(idxs, size=3, replace=False)
-            mutant = X[a] + F * (X[b] - X[c])
-            mutant = clamp(mutant, lo, hi)
-
+            mutant = clamp(X[a] + F * (X[b] - X[c]), lo, hi)
             trial = X[i].copy()
             jrand = int(rng.integers(0, d))
             for j in range(d):
                 if rng.random() < CR or j == jrand:
                     trial[j] = mutant[j]
-
             y = evalf(trial)
             if y < fit[i]:
                 X[i] = trial
@@ -350,7 +314,6 @@ def de_rand_1_bin(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Generat
 
 
 def ga_real_coded(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Generator, pop: int = 40):
-    # Simple real-coded GA: tournament selection + blend crossover + Gaussian mutation
     d = bounds.shape[0]
     lo, hi = bounds[:, 0], bounds[:, 1]
     X = rng.uniform(lo, hi, size=(pop, d))
@@ -370,7 +333,6 @@ def ga_real_coded(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Generat
             if rng.random() < 0.9:
                 child += rng.normal(0, 0.1 * (hi - lo), size=d)
             newX[i] = clamp(child, lo, hi)
-
         X = newX
         fit = np.array([evalf(X[i]) for i in range(pop)], dtype=float)
 
@@ -378,32 +340,25 @@ def ga_real_coded(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Generat
 
 
 def es_mu_lambda(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Generator, mu: int = 10, lam: int = 40):
-    # (mu, lambda)-ES with log-normal self-adaptation (global step size per individual)
     d = bounds.shape[0]
     lo, hi = bounds[:, 0], bounds[:, 1]
     X = rng.uniform(lo, hi, size=(mu, d))
     sigma = np.full(mu, 0.3 * np.mean(hi - lo))
-
-    # consume initial evals
     _ = np.array([evalf(X[i]) for i in range(mu)], dtype=float)
 
     tau = 1.0 / math.sqrt(d)
-
     while evalf.remaining() >= lam:
         kids = []
         kids_sigma = []
         for _ in range(lam):
             p = int(rng.integers(0, mu))
             sig = sigma[p] * math.exp(tau * rng.normal())
-            child = X[p] + rng.normal(0, sig, size=d)
-            child = clamp(child, lo, hi)
+            child = clamp(X[p] + rng.normal(0, sig, size=d), lo, hi)
             kids.append(child)
             kids_sigma.append(sig)
-
         kids = np.array(kids, dtype=float)
         kids_sigma = np.array(kids_sigma, dtype=float)
         kid_fit = np.array([evalf(kids[i]) for i in range(lam)], dtype=float)
-
         idx = np.argsort(kid_fit)[:mu]
         X = kids[idx]
         sigma = kids_sigma[idx]
@@ -411,19 +366,19 @@ def es_mu_lambda(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Generato
     return evalf.best, evalf.evals
 
 
-# -------- Under-test algorithms (simplified but runnable) --------
+# -------- Under-test algorithms (FIXED schedules) --------
 def gwo(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Generator, pop: int = 30):
     d = bounds.shape[0]
     lo, hi = bounds[:, 0], bounds[:, 1]
     X = rng.uniform(lo, hi, size=(pop, d))
     fit = np.array([evalf(X[i]) for i in range(pop)], dtype=float)
 
+    max_iter = max(1, evalf.budget // pop)  # FIX: schedule tied to budget
     it = 0
-    max_it = 1_000_000
     while evalf.remaining() >= pop:
         idx = np.argsort(fit)
         alpha, beta, delta = X[idx[0]], X[idx[1]], X[idx[2]]
-        a = 2.0 * (1.0 - it / max(1, max_it))
+        a = 2.0 - 2.0 * (it / max_iter)
 
         newX = np.empty_like(X)
         for i in range(pop):
@@ -447,6 +402,8 @@ def gwo(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Generator, pop: i
         X = clamp(newX, lo, hi)
         fit = np.array([evalf(X[i]) for i in range(pop)], dtype=float)
         it += 1
+        if it >= max_iter:
+            break
 
     return evalf.best, evalf.evals
 
@@ -458,11 +415,10 @@ def woa(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Generator, pop: i
     fit = np.array([evalf(X[i]) for i in range(pop)], dtype=float)
     best = X[int(np.argmin(fit))].copy()
 
+    max_iter = max(1, evalf.budget // pop)  # FIX
     t = 0
-    max_t = 1_000_000
     while evalf.remaining() >= pop:
-        a = 2.0 * (1.0 - t / max(1, max_t))
-
+        a = 2.0 - 2.0 * (t / max_iter)
         for i in range(pop):
             r1 = rng.random(d)
             r2 = rng.random(d)
@@ -481,15 +437,17 @@ def woa(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Generator, pop: i
                     X[i] = Xrand - A * D
             else:
                 D = np.abs(best - X[i])
-                l = rng.uniform(-1, 1, size=d)
+                l = float(rng.uniform(-1, 1))  # closer to standard WOA: scalar l
                 b = 1.0
-                X[i] = D * np.exp(b * l) * np.cos(2 * np.pi * l) + best
+                X[i] = D * math.exp(b * l) * math.cos(2 * math.pi * l) + best
 
             X[i] = clamp(X[i], lo, hi)
 
         fit = np.array([evalf(X[i]) for i in range(pop)], dtype=float)
         best = X[int(np.argmin(fit))].copy()
         t += 1
+        if t >= max_iter:
+            break
 
     return evalf.best, evalf.evals
 
@@ -500,24 +458,26 @@ def mfo(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Generator, pop: i
     moths = rng.uniform(lo, hi, size=(pop, d))
     moth_fit = np.array([evalf(moths[i]) for i in range(pop)], dtype=float)
 
+    max_iter = max(1, evalf.budget // pop)  # FIX
     t = 0
-    max_t = 1_000_000
     while evalf.remaining() >= pop:
         idx = np.argsort(moth_fit)
         flames = moths[idx].copy()
 
-        _a = -1 + t * (-1 / max(1, max_t))
+        # typical MFO uses a decreasing parameter; we keep a minimal but progressing schedule
         new_moths = np.empty_like(moths)
         for i in range(pop):
             flame = flames[min(i, pop - 1)]
             D = np.abs(flame - moths[i])
-            l = rng.uniform(-1, 1, size=d)
+            l = float(rng.uniform(-1, 1))  # scalar l often used
             b = 1.0
-            new_moths[i] = D * np.exp(b * l) * np.cos(2 * np.pi * l) + flame
+            new_moths[i] = D * math.exp(b * l) * math.cos(2 * math.pi * l) + flame
 
         moths = clamp(new_moths, lo, hi)
         moth_fit = np.array([evalf(moths[i]) for i in range(pop)], dtype=float)
         t += 1
+        if t >= max_iter:
+            break
 
     return evalf.best, evalf.evals
 
@@ -534,25 +494,21 @@ def firefly(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Generator, po
 
     while evalf.remaining() >= pop:
         idx = np.argsort(fit)
-        topk = idx[:max(3, pop // 5)]
-
+        elite = idx[:max(3, pop // 5)]
         newX = X.copy()
         for i in range(pop):
-            candidates = topk[fit[topk] < fit[i]]
-            if candidates.size == 0:
+            better = elite[fit[elite] < fit[i]]
+            if better.size == 0:
                 newX[i] = X[i] + rng.normal(0, alpha, size=d)
             else:
-                j = int(rng.choice(candidates))
+                j = int(rng.choice(better))
                 rij = np.linalg.norm(X[i] - X[j])
                 beta = beta0 * math.exp(-gamma * rij * rij)
-                step = beta * (X[j] - X[i]) + rng.normal(0, alpha, size=d)
-                newX[i] = X[i] + step
-
+                newX[i] = X[i] + beta * (X[j] - X[i]) + rng.normal(0, alpha, size=d)
             newX[i] = clamp(newX[i], lo, hi)
-
         X = newX
         fit = np.array([evalf(X[i]) for i in range(pop)], dtype=float)
-        alpha *= 0.999
+        alpha *= 0.995  # slightly faster decay
 
     return evalf.best, evalf.evals
 
@@ -562,8 +518,8 @@ def bat(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Generator, pop: i
     lo, hi = bounds[:, 0], bounds[:, 1]
     X = rng.uniform(lo, hi, size=(pop, d))
     V = np.zeros((pop, d), dtype=float)
-
     fit = np.array([evalf(X[i]) for i in range(pop)], dtype=float)
+
     best = X[int(np.argmin(fit))].copy()
     best_y = float(np.min(fit))
 
@@ -575,12 +531,10 @@ def bat(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Generator, pop: i
         for i in range(pop):
             freq = fmin + (fmax - fmin) * rng.random()
             V[i] = V[i] + (X[i] - best) * freq
-            cand = X[i] + V[i]
-            cand = clamp(cand, lo, hi)
+            cand = clamp(X[i] + V[i], lo, hi)
 
             if rng.random() > r[i]:
-                eps = rng.normal(0, 0.1 * np.mean(hi - lo), size=d)
-                cand = clamp(best + eps, lo, hi)
+                cand = clamp(best + rng.normal(0, 0.1 * np.mean(hi - lo), size=d), lo, hi)
 
             yc = evalf(cand)
             if yc < fit[i] and rng.random() < A[i]:
@@ -599,7 +553,6 @@ def bat(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Generator, pop: i
 def alo(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Generator, pop: int = 30):
     d = bounds.shape[0]
     lo, hi = bounds[:, 0], bounds[:, 1]
-
     antlions = rng.uniform(lo, hi, size=(pop, d))
     al_fit = np.array([evalf(antlions[i]) for i in range(pop)], dtype=float)
 
@@ -607,26 +560,26 @@ def alo(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Generator, pop: i
     elite = antlions[elite_idx].copy()
     elite_fit = float(al_fit[elite_idx])
 
+    max_iter = max(1, evalf.budget // pop)  # FIX
     t = 0
-    max_t = 1_000_000
     while evalf.remaining() >= pop:
         inv = 1.0 / (al_fit - np.min(al_fit) + 1e-12)
         probs = inv / np.sum(inv)
 
-        shrink = 0.5 * (1 - t / max(1, max_t))
-        radius = shrink * np.mean(hi - lo)
+        # shrink radius across iterations (now meaningful)
+        shrink = 1.0 - (t / max_iter)
+        radius = max(1e-9, shrink) * np.mean(hi - lo)
 
         ants = np.empty((pop, d), dtype=float)
         for i in range(pop):
             j = int(rng.choice(pop, p=probs))
             center = 0.5 * (antlions[j] + elite)
-            ants[i] = clamp(center + rng.normal(0, radius, size=d), lo, hi)
+            ants[i] = clamp(center + rng.normal(0, 0.5 * radius, size=d), lo, hi)
 
         ant_fit = np.array([evalf(ants[i]) for i in range(pop)], dtype=float)
-        for i in range(pop):
-            if ant_fit[i] < al_fit[i]:
-                antlions[i] = ants[i]
-                al_fit[i] = ant_fit[i]
+        improved = ant_fit < al_fit
+        antlions[improved] = ants[improved]
+        al_fit[improved] = ant_fit[improved]
 
         elite_idx = int(np.argmin(al_fit))
         if al_fit[elite_idx] < elite_fit:
@@ -634,21 +587,19 @@ def alo(evalf: EvalCounter, bounds: np.ndarray, rng: np.random.Generator, pop: i
             elite = antlions[elite_idx].copy()
 
         t += 1
+        if t >= max_iter:
+            break
 
     return evalf.best, evalf.evals
 
 
-# Registry
 ALGORITHMS = {
-    # PSO anchors
     "PSO_STD": pso_standard,
     "PSO_CONSTR": pso_constriction,
     "PSO_RING": pso_ring,
-    # Evolution anchors
     "DE": de_rand_1_bin,
     "GA": ga_real_coded,
     "ES_ML": es_mu_lambda,
-    # Under-test (paper list)
     "GWO": gwo,
     "MFO": mfo,
     "WOA": woa,
@@ -662,7 +613,7 @@ EVO_ANCHORS = ["DE", "GA", "ES_ML"]
 
 
 # ============================================================
-# Runner: produce runs.csv + instance_summary.csv
+# Runner
 # ============================================================
 
 def run_trials(
@@ -681,7 +632,6 @@ def run_trials(
 
     instances = make_instances(funcs, dims, n_per_cell, master_seed)
 
-    # per-run log
     with open(runs_path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(
             f,
@@ -695,14 +645,11 @@ def run_trials(
         for inst in instances:
             obj = inst.make_objective()
             bounds = inst.bounds
-
             for mult in budget_mults:
                 budget = int(mult * inst.dim)
                 tier = f"{mult}xD"
-
                 for algo_name, algo_fn in ALGORITHMS.items():
                     for s in seeds:
-                        # stable seeded RNG (portable)
                         seed_int = (hash((master_seed, inst.instance_id, tier, algo_name, s)) & 0xFFFFFFFF)
                         rng = np.random.default_rng(seed_int)
 
@@ -712,36 +659,32 @@ def run_trials(
                         except TypeError:
                             best, evals = algo_fn(evalf=evalf, bounds=bounds, rng=rng)
 
-                        w.writerow(
-                            {
-                                "instance_id": inst.instance_id,
-                                "func": inst.func,
-                                "dim": inst.dim,
-                                "budget": budget,
-                                "budget_tier": tier,
-                                "algo": algo_name,
-                                "seed": s,
-                                "best": best,
-                                "evals": evals,
-                                "meta_json": json.dumps({"shift": True, "rot": True}, ensure_ascii=False),
-                            }
-                        )
+                        w.writerow({
+                            "instance_id": inst.instance_id,
+                            "func": inst.func,
+                            "dim": inst.dim,
+                            "budget": budget,
+                            "budget_tier": tier,
+                            "algo": algo_name,
+                            "seed": s,
+                            "best": best,
+                            "evals": evals,
+                            "meta_json": json.dumps({"shift": True, "rot": True}, ensure_ascii=False),
+                        })
 
-    # Aggregate to instance_summary: median over seeds
+    # aggregate median over seeds
     rows = []
     with open(runs_path, "r", newline="", encoding="utf-8") as f:
         r = csv.DictReader(f)
         for row in r:
-            rows.append(
-                {
-                    "instance_id": row["instance_id"],
-                    "func": row["func"],
-                    "dim": int(row["dim"]),
-                    "budget_tier": row["budget_tier"],
-                    "algo": row["algo"],
-                    "best": float(row["best"]),
-                }
-            )
+            rows.append({
+                "instance_id": row["instance_id"],
+                "func": row["func"],
+                "dim": int(row["dim"]),
+                "budget_tier": row["budget_tier"],
+                "algo": row["algo"],
+                "best": float(row["best"]),
+            })
 
     grouped: Dict[Tuple[str, str, str], List[float]] = {}
     meta: Dict[str, Dict[str, Any]] = {}
@@ -752,36 +695,31 @@ def run_trials(
     with open(summary_path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(
             f,
-            fieldnames=[
-                "instance_id", "func", "dim", "dim_bin",
-                "budget_tier", "algo", "best_median"
-            ],
+            fieldnames=["instance_id", "func", "dim", "dim_bin", "budget_tier", "algo", "best_median"],
         )
         w.writeheader()
         for (iid, tier, algo), vals in grouped.items():
             fn = meta[iid]["func"]
             d = meta[iid]["dim"]
-            w.writerow(
-                {
-                    "instance_id": iid,
-                    "func": fn,
-                    "dim": d,
-                    "dim_bin": dim_bin(d),
-                    "budget_tier": tier,
-                    "algo": algo,
-                    "best_median": float(np.median(vals)),
-                }
-            )
+            w.writerow({
+                "instance_id": iid,
+                "func": fn,
+                "dim": d,
+                "dim_bin": dim_bin(d),
+                "budget_tier": tier,
+                "algo": algo,
+                "best_median": float(np.median(vals)),
+            })
 
     print(f"[OK] wrote {runs_path}")
     print(f"[OK] wrote {summary_path}")
 
 
 # ============================================================
-# Analysis: Top1 + Topk + Shape membership
+# Analysis
 # ============================================================
 
-def analyze(out_dir: str, alpha0: float, mc: int, seed: int, topk: int):
+def analyze(out_dir: str, alpha0: float, mc: int, seed: int, topk: int, min_hits: int, min_wins: int):
     if topk < 1:
         raise ValueError("--topk must be >= 1")
 
@@ -790,31 +728,26 @@ def analyze(out_dir: str, alpha0: float, mc: int, seed: int, topk: int):
     hits_topk_path = os.path.join(out_dir, f"hits_by_group_top{topk}.csv")
     membership_path = os.path.join(out_dir, "membership.csv")
 
-    # load summary
     rows = []
     with open(summary_path, "r", newline="", encoding="utf-8") as f:
         r = csv.DictReader(f)
         for row in r:
-            rows.append(
-                {
-                    "instance_id": row["instance_id"],
-                    "func": row["func"],
-                    "dim": int(row["dim"]),
-                    "dim_bin": row["dim_bin"],
-                    "budget_tier": row["budget_tier"],
-                    "algo": row["algo"],
-                    "best_median": float(row["best_median"]),
-                }
-            )
+            rows.append({
+                "instance_id": row["instance_id"],
+                "func": row["func"],
+                "dim": int(row["dim"]),
+                "dim_bin": row["dim_bin"],
+                "budget_tier": row["budget_tier"],
+                "algo": row["algo"],
+                "best_median": float(row["best_median"]),
+            })
 
     algos = list(ALGORITHMS.keys())
     algo_index = {a: i for i, a in enumerate(algos)}
     K = len(algos)
 
-    # instance_tier keys
     inst_tier_keys = sorted(set((rr["instance_id"], rr["budget_tier"]) for rr in rows))
 
-    # mapping: inst_tier -> subset rows
     per_inst_tier: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
     group_of_inst_tier: Dict[Tuple[str, str], Tuple[str, str, str]] = {}
 
@@ -823,7 +756,7 @@ def analyze(out_dir: str, alpha0: float, mc: int, seed: int, topk: int):
         per_inst_tier[(iid, tier)] = subset
         fn = subset[0]["func"]
         db = subset[0]["dim_bin"]
-        group_of_inst_tier[(iid, tier)] = (fn, db, tier)  # group
+        group_of_inst_tier[(iid, tier)] = (fn, db, tier)
 
     groups = sorted(set(group_of_inst_tier.values()))
     G = len(groups)
@@ -831,41 +764,45 @@ def analyze(out_dir: str, alpha0: float, mc: int, seed: int, topk: int):
 
     rng = np.random.default_rng(seed)
 
-    # Top-1 counts per group
-    top1_counts_by_group: Dict[Tuple[str, str, str], np.ndarray] = {g: np.zeros(K, dtype=int) for g in groups}
+    top1_counts_by_group = {g: np.zeros(K, dtype=int) for g in groups}
+    topk_hits_by_group = {g: np.zeros(K, dtype=int) for g in groups}
+    n_inst_by_group = {g: 0 for g in groups}
 
-    # Top-k hits per group
-    topk_hits_by_group: Dict[Tuple[str, str, str], np.ndarray] = {g: np.zeros(K, dtype=int) for g in groups}
-    n_inst_by_group: Dict[Tuple[str, str, str], int] = {g: 0 for g in groups}
+    # ShapeRegret: score = 1 - normalized regret
+    shape_regret_by_group: Dict[Tuple[str, str, str], List[np.ndarray]] = {g: [] for g in groups}
+    # ShapeRank: score = (K - rank)/(K-1)
+    shape_rank_by_group: Dict[Tuple[str, str, str], List[np.ndarray]] = {g: [] for g in groups}
 
-    # Shape data: per group list of score vectors (1 - normalized regret), each shape [K]
-    shape_by_group: Dict[Tuple[str, str, str], List[np.ndarray]] = {g: [] for g in groups}
-
-    # fill counts
     for it_key, subset in per_inst_tier.items():
         g = group_of_inst_tier[it_key]
         n_inst_by_group[g] += 1
 
         subset_sorted = sorted(subset, key=lambda rr: rr["best_median"])
+        winner = subset_sorted[0]["algo"]
+        top1_counts_by_group[g][algo_index[winner]] += 1
 
-        # top-1 winner
-        winner_algo = subset_sorted[0]["algo"]
-        top1_counts_by_group[g][algo_index[winner_algo]] += 1
-
-        # top-k hits
         for rr in subset_sorted[:min(topk, len(subset_sorted))]:
             topk_hits_by_group[g][algo_index[rr["algo"]]] += 1
 
-        # shape score vector for this instance_tier
+        # Build per-algo best array
         vals = np.full(K, np.nan, dtype=float)
         for rr in subset:
             vals[algo_index[rr["algo"]]] = rr["best_median"]
 
+        # ShapeRegret
         vmin = float(np.nanmin(vals))
         vmax = float(np.nanmax(vals))
         norm_regret = (vals - vmin) / (vmax - vmin + 1e-12)
-        score = 1.0 - norm_regret  # higher is better
-        shape_by_group[g].append(score)
+        score_regret = 1.0 - norm_regret
+        shape_regret_by_group[g].append(score_regret)
+
+        # ShapeRank
+        rank_score = np.zeros(K, dtype=float)
+        # ranks from sorted order
+        for rank, rr in enumerate(subset_sorted, start=1):  # 1 is best
+            ai = algo_index[rr["algo"]]
+            rank_score[ai] = (K - rank) / (K - 1 + 1e-12)
+        shape_rank_by_group[g].append(rank_score)
 
     # write wins_by_group_top1.csv
     with open(wins_top1_path, "w", newline="", encoding="utf-8") as f:
@@ -876,16 +813,14 @@ def analyze(out_dir: str, alpha0: float, mc: int, seed: int, topk: int):
             c = top1_counts_by_group[g]
             n = int(np.sum(c))
             for a in algos:
-                w.writerow(
-                    {
-                        "func": fn,
-                        "dim_bin": db,
-                        "budget_tier": tier,
-                        "algo": a,
-                        "win_count": int(c[algo_index[a]]),
-                        "n_instances_in_group": n,
-                    }
-                )
+                w.writerow({
+                    "func": fn,
+                    "dim_bin": db,
+                    "budget_tier": tier,
+                    "algo": a,
+                    "win_count": int(c[algo_index[a]]),
+                    "n_instances_in_group": n,
+                })
 
     # write hits_by_group_topk.csv
     with open(hits_topk_path, "w", newline="", encoding="utf-8") as f:
@@ -896,31 +831,25 @@ def analyze(out_dir: str, alpha0: float, mc: int, seed: int, topk: int):
             hits = topk_hits_by_group[g]
             n = int(n_inst_by_group[g])
             for a in algos:
-                w.writerow(
-                    {
-                        "func": fn,
-                        "dim_bin": db,
-                        "budget_tier": tier,
-                        "algo": a,
-                        f"hit_count_top{topk}": int(hits[algo_index[a]]),
-                        "n_instances_in_group": n,
-                    }
-                )
+                w.writerow({
+                    "func": fn,
+                    "dim_bin": db,
+                    "budget_tier": tier,
+                    "algo": a,
+                    f"hit_count_top{topk}": int(hits[algo_index[a]]),
+                    "n_instances_in_group": n,
+                })
 
-    # anchors
-    pso_ids = [algo_index[a] for a in PSO_ANCHORS]
-    evo_ids = [algo_index[a] for a in EVO_ANCHORS]
+    pso_ids = [algo_index[a] for a in ["PSO_STD", "PSO_CONSTR", "PSO_RING"]]
+    evo_ids = [algo_index[a] for a in ["DE", "GA", "ES_ML"]]
 
-    # ------------------------------------------------------------
-    # A) Top-1 membership (Dirichlet on winners)
-    # ------------------------------------------------------------
+    # ---------- Top-1 membership ----------
     P_top1 = np.zeros((mc, K, G), dtype=float)
     for g in groups:
         gi = group_index[g]
         P_top1[:, :, gi] = dirichlet_samples(top1_counts_by_group[g], alpha0=alpha0, n_mc=mc, rng=rng)
+    V_top1 = P_top1 / np.clip(P_top1.sum(axis=2, keepdims=True), 1e-12, None)
 
-    # fingerprints over groups
-    V_top1 = P_top1 / np.clip(P_top1.sum(axis=2, keepdims=True), 1e-12, None)  # [mc,K,G]
     C_pso_top1 = np.mean(V_top1[:, pso_ids, :], axis=1)
     C_evo_top1 = np.mean(V_top1[:, evo_ids, :], axis=1)
     C_pso_top1 = C_pso_top1 / np.clip(C_pso_top1.sum(axis=1, keepdims=True), 1e-12, None)
@@ -933,9 +862,7 @@ def analyze(out_dir: str, alpha0: float, mc: int, seed: int, topk: int):
             de = js_divergence(V_top1[s, ai, :], C_evo_top1[s, :])
             P_PSO_top1_mc[s, ai] = 1.0 if dp < de else 0.0
 
-    # ------------------------------------------------------------
-    # B) Top-k membership (Beta on hit rates)
-    # ------------------------------------------------------------
+    # ---------- Top-k membership ----------
     P_hit = np.zeros((mc, K, G), dtype=float)
     for g in groups:
         gi = group_index[g]
@@ -957,49 +884,42 @@ def analyze(out_dir: str, alpha0: float, mc: int, seed: int, topk: int):
             de = js_divergence(V_topk[s, ai, :], C_evo_topk[s, :])
             P_PSO_topk_mc[s, ai] = 1.0 if dp < de else 0.0
 
-    # ------------------------------------------------------------
-    # C) Shape membership (bootstrap on normalized-regret profiles)
-    # ------------------------------------------------------------
-    group_mats: Dict[Tuple[str, str, str], np.ndarray] = {}
-    for g in groups:
-        mat = np.stack(shape_by_group[g], axis=0) if len(shape_by_group[g]) > 0 else np.zeros((0, K), dtype=float)
-        group_mats[g] = mat
-
-    P_PSO_shape_mc = np.zeros((mc, K), dtype=float)
-    for s in range(mc):
-        # M: [K,G] mean score vector per group
-        M = np.zeros((K, G), dtype=float)
-
+    # ---------- Shape membership (Regret + Rank) ----------
+    def bootstrap_shape(shape_by_group: Dict[Tuple[str, str, str], List[np.ndarray]]) -> np.ndarray:
+        mats = {}
         for g in groups:
-            gi = group_index[g]
-            mat = group_mats[g]
-            if mat.shape[0] == 0:
-                continue
-            # bootstrap resample instance-tiers within group
-            idx = rng.integers(0, mat.shape[0], size=mat.shape[0])
-            M[:, gi] = mat[idx].mean(axis=0)
+            mats[g] = np.stack(shape_by_group[g], axis=0) if len(shape_by_group[g]) else np.zeros((0, K), dtype=float)
 
-        # z-score each algorithm across groups to focus on pattern (shape)
-        mean_a = M.mean(axis=1, keepdims=True)
-        std_a = M.std(axis=1, keepdims=True) + 1e-12
-        Mz = (M - mean_a) / std_a  # [K,G]
+        out = np.zeros((mc, K), dtype=float)
+        for s in range(mc):
+            M = np.zeros((K, G), dtype=float)
+            for g in groups:
+                gi = group_index[g]
+                mat = mats[g]
+                if mat.shape[0] == 0:
+                    continue
+                idx = rng.integers(0, mat.shape[0], size=mat.shape[0])
+                M[:, gi] = mat[idx].mean(axis=0)
 
-        Cp = Mz[pso_ids].mean(axis=0)  # [G]
-        Ce = Mz[evo_ids].mean(axis=0)  # [G]
+            # z-score per algo across groups
+            mean_a = M.mean(axis=1, keepdims=True)
+            std_a = M.std(axis=1, keepdims=True) + 1e-12
+            Mz = (M - mean_a) / std_a
 
-        for ai in range(K):
-            sp = cosine_sim(Mz[ai], Cp)
-            se = cosine_sim(Mz[ai], Ce)
-            P_PSO_shape_mc[s, ai] = 1.0 if sp > se else 0.0
+            Cp = Mz[pso_ids].mean(axis=0)
+            Ce = Mz[evo_ids].mean(axis=0)
 
-    # ------------------------------------------------------------
-    # Summaries (BUG FIX HERE): quantiles directly on mc_mat
-    # ------------------------------------------------------------
+            for ai in range(K):
+                sp = cosine_sim(Mz[ai], Cp)
+                se = cosine_sim(Mz[ai], Ce)
+                out[s, ai] = 1.0 if sp > se else 0.0
+        return out
+
+    P_PSO_shape_regret_mc = bootstrap_shape(shape_regret_by_group)
+    P_PSO_shape_rank_mc = bootstrap_shape(shape_rank_by_group)
+
+    # ---------- Summaries ----------
     def summarize_binary(mc_mat: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        mc_mat: [mc, K] with values in {0,1}
-        returns mean + (p05, p95) quantiles across mc.
-        """
         mean = mc_mat.mean(axis=0)
         lo = np.quantile(mc_mat, 0.05, axis=0)
         hi = np.quantile(mc_mat, 0.95, axis=0)
@@ -1007,7 +927,12 @@ def analyze(out_dir: str, alpha0: float, mc: int, seed: int, topk: int):
 
     p1_mean, p1_lo, p1_hi = summarize_binary(P_PSO_top1_mc)
     pk_mean, pk_lo, pk_hi = summarize_binary(P_PSO_topk_mc)
-    ps_mean, ps_lo, ps_hi = summarize_binary(P_PSO_shape_mc)
+    sr_mean, sr_lo, sr_hi = summarize_binary(P_PSO_shape_regret_mc)
+    rk_mean, rk_lo, rk_hi = summarize_binary(P_PSO_shape_rank_mc)
+
+    # Combined shape (simple average)
+    shape_comb_mc = 0.5 * P_PSO_shape_regret_mc + 0.5 * P_PSO_shape_rank_mc
+    sc_mean, sc_lo, sc_hi = summarize_binary(shape_comb_mc)
 
     # totals
     total_wins = np.zeros(K, dtype=int)
@@ -1016,49 +941,62 @@ def analyze(out_dir: str, alpha0: float, mc: int, seed: int, topk: int):
         total_wins += top1_counts_by_group[g]
         total_hits += topk_hits_by_group[g]
 
+    # evidence gate
     report = []
     for ai, a in enumerate(algos):
-        report.append(
-            {
-                "algo": a,
-                "total_top1_wins": int(total_wins[ai]),
-                f"total_top{topk}_hits": int(total_hits[ai]),
+        wins = int(total_wins[ai])
+        hits = int(total_hits[ai])
+        sufficient = (wins >= min_wins) or (hits >= min_hits)
+        status = "OK" if sufficient else "INSUFFICIENT"
 
-                "P_PSO_top1": float(p1_mean[ai]),
-                "P_PSO_top1_p05": float(p1_lo[ai]),
-                "P_PSO_top1_p95": float(p1_hi[ai]),
+        report.append({
+            "algo": a,
+            "status": status,
+            "total_top1_wins": wins,
+            f"total_top{topk}_hits": hits,
 
-                f"P_PSO_top{topk}": float(pk_mean[ai]),
-                f"P_PSO_top{topk}_p05": float(pk_lo[ai]),
-                f"P_PSO_top{topk}_p95": float(pk_hi[ai]),
+            "P_PSO_top1": float(p1_mean[ai]),
+            "P_PSO_top1_p05": float(p1_lo[ai]),
+            "P_PSO_top1_p95": float(p1_hi[ai]),
 
-                "P_PSO_shape": float(ps_mean[ai]),
-                "P_PSO_shape_p05": float(ps_lo[ai]),
-                "P_PSO_shape_p95": float(ps_hi[ai]),
-            }
-        )
+            f"P_PSO_top{topk}": float(pk_mean[ai]),
+            f"P_PSO_top{topk}_p05": float(pk_lo[ai]),
+            f"P_PSO_top{topk}_p95": float(pk_hi[ai]),
 
-    # write membership.csv (sorted by shape membership)
+            "P_PSO_shape_regret": float(sr_mean[ai]),
+            "P_PSO_shape_regret_p05": float(sr_lo[ai]),
+            "P_PSO_shape_regret_p95": float(sr_hi[ai]),
+
+            "P_PSO_shape_rank": float(rk_mean[ai]),
+            "P_PSO_shape_rank_p05": float(rk_lo[ai]),
+            "P_PSO_shape_rank_p95": float(rk_hi[ai]),
+
+            "P_PSO_shape_combined": float(sc_mean[ai]),
+            "P_PSO_shape_combined_p05": float(sc_lo[ai]),
+            "P_PSO_shape_combined_p95": float(sc_hi[ai]),
+        })
+
     with open(membership_path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(report[0].keys()))
         w.writeheader()
-        w.writerows(sorted(report, key=lambda rr: rr["P_PSO_shape"], reverse=True))
+        w.writerows(sorted(report, key=lambda rr: rr["P_PSO_shape_combined"], reverse=True))
 
     print(f"[OK] wrote {wins_top1_path}")
     print(f"[OK] wrote {hits_topk_path}")
     print(f"[OK] wrote {membership_path}\n")
 
-    focus = PSO_ANCHORS + EVO_ANCHORS + ["GWO", "MFO", "WOA", "FA", "BA", "ALO"]
+    focus = ["PSO_STD", "PSO_CONSTR", "PSO_RING", "DE", "GA", "ES_ML", "GWO", "MFO", "WOA", "FA", "BA", "ALO"]
     rep_map = {r["algo"]: r for r in report}
 
-    print("=== Membership summary (three signals) ===")
+    print("=== Membership summary (with evidence gate) ===")
     for a in focus:
         r = rep_map[a]
         print(
-            f"{a:10s}  "
-            f"Top1 P(PSO)={r['P_PSO_top1']:.3f} | "
-            f"Top{topk} P(PSO)={r[f'P_PSO_top{topk}']:.3f} | "
-            f"Shape P(PSO)={r['P_PSO_shape']:.3f}"
+            f"{a:10s}  status={r['status']:12s}  "
+            f"Top1={r['P_PSO_top1']:.3f}  "
+            f"Top{topk}={r[f'P_PSO_top{topk}']:.3f}  "
+            f"ShapeComb={r['P_PSO_shape_combined']:.3f}  "
+            f"(wins={r['total_top1_wins']}, hits={r[f'total_top{topk}_hits']})"
         )
 
 
@@ -1076,7 +1014,7 @@ def main():
     ap_run.add_argument("--dims", type=str, default="5,10")
     ap_run.add_argument("--n_per_cell", type=int, default=5)
     ap_run.add_argument("--seeds", type=str, default="0,1,2")
-    ap_run.add_argument("--budget_mults", type=str, default="200,1000")  # budget = mult * D
+    ap_run.add_argument("--budget_mults", type=str, default="200,1000")
     ap_run.add_argument("--master_seed", type=int, default=123)
     ap_run.add_argument("--pop", type=int, default=30)
 
@@ -1086,6 +1024,8 @@ def main():
     ap_an.add_argument("--mc", type=int, default=4000)
     ap_an.add_argument("--seed", type=int, default=2026)
     ap_an.add_argument("--topk", type=int, default=3)
+    ap_an.add_argument("--min_hits", type=int, default=5, help="evidence gate: minimum total Top-k hits")
+    ap_an.add_argument("--min_wins", type=int, default=1, help="evidence gate: minimum total Top-1 wins")
 
     ap_all = sub.add_parser("all")
     ap_all.add_argument("--out_dir", type=str, default="out")
@@ -1100,6 +1040,8 @@ def main():
     ap_all.add_argument("--mc", type=int, default=4000)
     ap_all.add_argument("--seed", type=int, default=2026)
     ap_all.add_argument("--topk", type=int, default=3)
+    ap_all.add_argument("--min_hits", type=int, default=5)
+    ap_all.add_argument("--min_wins", type=int, default=1)
 
     args = ap.parse_args()
 
@@ -1127,6 +1069,8 @@ def main():
             mc=args.mc,
             seed=args.seed,
             topk=args.topk,
+            min_hits=args.min_hits,
+            min_wins=args.min_wins,
         )
 
 
