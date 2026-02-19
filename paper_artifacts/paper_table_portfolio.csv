@@ -1,0 +1,5 @@
+domain,algo_variant,wins,mean_of_wins
+bin,HC(flips=1),3,0.3350694444444444
+cont,"PSO_STD(p=20,w=0.72,c1=1.49,c2=1.49)",6,0.31023817135549875
+cont,HC_CONT(sigma=0.2),2,0.12551950127877237
+cont,"DE(pop=20,F=0.8,CR=0.9)",1,0.25625

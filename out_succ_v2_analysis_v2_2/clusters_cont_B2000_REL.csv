@@ -1,0 +1,8 @@
+cluster,algo_variant
+0,"PSO_STD(p=40,w=0.72,c1=1.49,c2=1.49)"
+0,"DE(pop=20,F=0.8,CR=0.9)"
+0,"PSO_RING(p=40,ring,w=0.72,c1=1.49,c2=1.49)"
+0,"DE(pop=40,F=0.8,CR=0.9)"
+0,RS_CONT
+1,"PSO_RING(p=20,ring,w=0.72,c1=1.49,c2=1.49)"
+2,"PSO_STD(p=20,w=0.72,c1=1.49,c2=1.49)"

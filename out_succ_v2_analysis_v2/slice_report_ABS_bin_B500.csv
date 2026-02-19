@@ -1,0 +1,24 @@
+type,view,domain,budget,instance_id,kept,weight,flag
+instance,ABS,bin,500,knapsack01_n20_cap114_i007,1,1.0,
+instance,ABS,bin,500,knapsack01_n20_cap114_i009,1,1.0,
+instance,ABS,bin,500,knapsack01_n20_cap84_i011,1,1.0,
+instance,ABS,bin,500,knapsack01_n30_cap159_i005,1,1.0,
+instance,ABS,bin,500,knapsack01_n30_cap162_i003,1,1.0,
+instance,ABS,bin,500,knapsack01_n40_cap195_i019,1,1.0,
+instance,ABS,bin,500,knapsack01_n40_cap199_i001,1,1.0,
+instance,ABS,bin,500,knapsack01_n40_cap199_i017,1,1.0,
+instance,ABS,bin,500,knapsack01_n40_cap209_i013,1,1.0,
+instance,ABS,bin,500,knapsack01_n40_cap210_i015,1,1.0,
+instance,ABS,bin,500,onemax_n100_i006,1,1.0,
+instance,ABS,bin,500,onemax_n100_i012,1,1.0,
+instance,ABS,bin,500,onemax_n30_i000,1,1.0,
+instance,ABS,bin,500,onemax_n30_i002,1,1.0,
+instance,ABS,bin,500,onemax_n30_i004,1,1.0,
+instance,ABS,bin,500,onemax_n30_i008,1,1.0,
+instance,ABS,bin,500,onemax_n30_i010,1,1.0,
+instance,ABS,bin,500,onemax_n60_i014,1,1.0,
+instance,ABS,bin,500,onemax_n60_i016,1,1.0,
+instance,ABS,bin,500,onemax_n60_i018,1,1.0,
+anchor,ABS,bin,500,,,,"Evolution: GA(pop=50,pc=0.9,pm=0.02)"
+anchor,ABS,bin,500,,,,LocalSearch: HC(flips=2)
+anchor,ABS,bin,500,,,,Random: RS_BIN

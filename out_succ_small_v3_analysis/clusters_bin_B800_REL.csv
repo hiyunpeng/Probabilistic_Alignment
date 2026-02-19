@@ -1,0 +1,14 @@
+cluster,algo_variant
+0,"SA(T0=2.0,alpha=0.99,flips=1)"
+0,HC(flips=1)
+0,"SA(T0=1.0,alpha=0.995,flips=1)"
+0,"UMDA(pop=100,elite=0.2)"
+0,"GA(pop=100,pc=0.9,pm=0.02)"
+0,"GA(pop=50,pc=0.9,pm=0.02)"
+0,"GA(pop=50,pc=0.9,pm=0.05)"
+0,RS_BIN
+1,"SA(T0=2.0,alpha=0.995,flips=2)"
+1,HC(flips=2)
+1,"UMDA(pop=50,elite=0.2)"
+2,TABU(tenure=12)
+2,TABU(tenure=7)

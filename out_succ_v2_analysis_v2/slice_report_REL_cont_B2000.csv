@@ -1,0 +1,25 @@
+type,view,domain,budget,instance_id,kept,weight,flag
+instance,REL,cont,2000,rastrigin_d10_i003,1,1.0,
+instance,REL,cont,2000,rastrigin_d10_i005,1,1.0,
+instance,REL,cont,2000,rastrigin_d10_i007,1,1.0,
+instance,REL,cont,2000,rastrigin_d10_i009,1,1.0,
+instance,REL,cont,2000,rastrigin_d10_i017,1,1.0,
+instance,REL,cont,2000,rastrigin_d20_i011,1,1.0,
+instance,REL,cont,2000,rastrigin_d20_i013,1,1.0,
+instance,REL,cont,2000,rastrigin_d5_i001,1,1.0,
+instance,REL,cont,2000,rastrigin_d5_i015,1,1.0,
+instance,REL,cont,2000,rastrigin_d5_i019,1,1.0,
+instance,REL,cont,2000,sphere_d10_i004,1,1.0,
+instance,REL,cont,2000,sphere_d10_i008,1,1.0,
+instance,REL,cont,2000,sphere_d20_i000,1,1.0,
+instance,REL,cont,2000,sphere_d20_i010,1,1.0,
+instance,REL,cont,2000,sphere_d20_i012,1,1.0,
+instance,REL,cont,2000,sphere_d20_i014,1,1.0,
+instance,REL,cont,2000,sphere_d20_i016,1,1.0,
+instance,REL,cont,2000,sphere_d5_i002,1,1.0,
+instance,REL,cont,2000,sphere_d5_i006,1,1.0,
+instance,REL,cont,2000,sphere_d5_i018,1,1.0,
+anchor,REL,cont,2000,,,,"Evolution: DE(pop=20,F=0.8,CR=0.9)"
+anchor,REL,cont,2000,,,,"PSO_local: PSO_RING(p=20,ring,w=0.72,c1=1.49,c2=1.49)"
+anchor,REL,cont,2000,,,,"PSO_global: PSO_STD(p=20,w=0.72,c1=1.49,c2=1.49)"
+anchor,REL,cont,2000,,,,Random: RS_CONT
