@@ -1,0 +1,12 @@
+CONT  budget=200    target=easy top5: ALO=0.045, BA=0.045, ES_1P1=0.045, FA=0.045, GWO=0.045
+CONT  budget=200    target=med  top5: ALO=0.045, BA=0.045, ES_1P1=0.045, FA=0.045, GWO=0.045
+CONT  budget=200    target=hard top5: ALO=0.045, BA=0.045, ES_1P1=0.045, FA=0.045, GWO=0.045
+CONT  budget=400    target=easy top5: ALO=0.045, BA=0.045, ES_1P1=0.045, FA=0.045, GWO=0.045
+CONT  budget=400    target=med  top5: ES_1P1=0.047, GWO=0.046, ALO=0.045, BA=0.045, FA=0.045
+CONT  budget=400    target=hard top5: ES_1P1=0.219, GWO=0.082, ALO=0.045, BA=0.045, FA=0.045
+CONT  budget=800    target=easy top5: ES_1P1=0.227, ALO=0.045, BA=0.045, FA=0.045, GWO=0.045
+CONT  budget=800    target=med  top5: ES_1P1=0.291, GWO=0.086, ALO=0.045, BA=0.045, FA=0.045
+CONT  budget=800    target=hard top5: ES_1P1=0.326, GWO=0.184, WOA=0.050, PSO_GBEST=0.046, ALO=0.045
+CONT  budget=1200   target=easy top5: ES_1P1=0.294, GWO=0.054, ALO=0.045, BA=0.045, FA=0.045
+CONT  budget=1200   target=med  top5: ES_1P1=0.294, GWO=0.119, WOA=0.048, PSO_GBEST=0.046, ALO=0.045
+CONT  budget=1200   target=hard top5: ES_1P1=0.370, GWO=0.239, PSO_GBEST=0.154, WOA=0.105, ALO=0.045

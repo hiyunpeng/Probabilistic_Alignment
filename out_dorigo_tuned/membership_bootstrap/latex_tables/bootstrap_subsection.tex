@@ -1,0 +1,8 @@
+\subsection{Bootstrap attribution test for PSO vs ES}
+\label{subsec:bootstrap_attribution}
+
+To move beyond descriptive clustering, we quantify uncertainty in the curve-based attribution using a stratified bootstrap over instances. For each replicate, we resample instances within each problem family, recompute the success--budget curves, standardise curve features across algorithms, and compute Euclidean distances to three anchors: \texttt{PSO_GBEST} (PSO), \texttt{ES_1P1} (ES), and a \texttt{Flat} baseline corresponding to the Bayesian floor. We record the distance margin $\Delta = d(\mathrm{ES}) - d(\mathrm{PSO})$, where $\Delta>0$ indicates PSO-side similarity.
+
+We classify an algorithm as \texttt{PSO-like} if the $(1-\alpha)$ bootstrap interval for $\Delta$ lies strictly above zero; as \texttt{ES-like} if the interval lies strictly below zero; and as \texttt{UNCERTAIN} otherwise. Algorithms with negligible headroom across the tested budgets or with high Flat membership are labelled \texttt{Flat/no-signal}, reflecting insufficient resolution under success-only metrics on strict tiers.
+
+In the present evaluation, the bootstrap test yields PSO-like algorithms: \texttt{FA, GWO, BA, PSO_GBEST}; ES-like: \texttt{ES_1P1}; Flat/no-signal: \texttt{MFO, ALO, WOA}; and Uncertain: \texttt{---}. Table~\ref{tab:bootstrap_membership} reports mean membership weights and bootstrap probabilities.

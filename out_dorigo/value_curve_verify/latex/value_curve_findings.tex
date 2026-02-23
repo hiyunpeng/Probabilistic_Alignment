@@ -1,0 +1,15 @@
+\paragraph{Value curves recover signal missed by success-only evaluation.}
+On the current budget ladder, success-only curves exhibit substantial floor effects: the mean between-algorithm
+separation (average standard deviation across all target$\times$budget features) is
+$\bar\sigma_\mathrm{succ}=0.015$ (95\% CI [0.014,0.016]),
+and a large fraction of algorithms fall into a no-signal regime under a headroom gate of 0.02
+(flat fraction $0.667$, 95\% CI [0.667,0.667]).
+In contrast, the value-based progress curves retain meaningful gradients even when targets are not reached:
+$\bar\sigma_\mathrm{val}=0.340$ (95\% CI [0.338,0.343]),
+implying a separation gain of approximately 23.3$\times$ relative to success-only curves,
+and the no-signal fraction drops to $0.014$ (95\% CI [0.000,0.167]).
+Moreover, algorithms that appear flat under success-only curves but show non-trivial improvement under value curves are:
+\texttt{FA}, \texttt{MFO}, \texttt{BA}, \texttt{ALO}.
+For example, \texttt{FA} (success headroom=0.000, value headroom=0.188); \texttt{MFO} (success headroom=0.000, value headroom=0.134); \texttt{BA} (success headroom=0.000, value headroom=0.108).
+These results confirm that value-based curves increase information content and are a practical remedy for ceiling/floor
+effects in success-only benchmarking. No anchors were provided (or anchors not found in CSV), so the script outputs signal recovery KPIs only. To do PSO/ES attribution on value curves, include anchor algorithms in the evaluated set and pass \texttt{--pso\_anchor} and \texttt{--es\_anchor}.

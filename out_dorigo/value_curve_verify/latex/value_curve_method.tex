@@ -1,0 +1,25 @@
+\subsection{{Value-based progress curves to mitigate no-signal regimes}}
+\label{{subsec:value_based_curves}}
+
+Success-only evaluation can enter a \emph{{no-signal}} regime on stricter tiers: many algorithms fail to hit the
+target within the tested budget ladder, so posterior success probabilities collapse to the Beta--Binomial floor.
+To retain information about \emph{{progress}} even when targets are not met, we augment success curves with a
+value-based curve derived from the best objective value attained in each run.
+
+Let $v_{{iabt}}$ denote a summary of best objective values for instance $i$, algorithm $a$, budget $b$, and target tier $t$
+(e.g., median best value across repeated runs). For each $(i,t)$ we define a robust reference scale across all algorithms and budgets:
+\[
+v_{{it}}^{{\mathrm{{best}}}} = Q_{{0.05}}\big(\{{v_{{iabt}}\}}_{{a,b}}\big), \qquad
+v_{{it}}^{{\mathrm{{worst}}}} = Q_{{0.95}}\big(\{{v_{{iabt}}\}}_{{a,b}}\big),
+\]
+and compute a clipped normalised regret (minimisation assumed):
+\[
+r_{{iabt}} = \mathrm{{clip}}\!\left(\frac{{v_{{iabt}} - v_{{it}}^{{\mathrm{{best}}}}}}{{v_{{it}}^{{\mathrm{{worst}}}} - v_{{it}}^{{\mathrm{{best}}}}}},\,0,\,1\right).
+\]
+The corresponding progress score is $s_{{iabt}} = 1 - r_{{iabt}} \in [0,1]$.
+We then form value-based budget curves by averaging $s_{{iabt}}$ over instances:
+\[
+\bar s_{{abt}} = \frac{1}{|\mathcal{{I}}|}\sum_{{i\in\mathcal{{I}}}} s_{{iabt}}.
+\]
+This representation preserves informative gradients in regimes where success is sparse, enabling
+behavioural comparison via curve shape, headroom, and clustering in the same manner as success curves.
