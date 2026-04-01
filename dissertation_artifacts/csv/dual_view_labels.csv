@@ -1,0 +1,11 @@
+algo_variant,label_success,label_fitness,disagree
+ALO,ES,ES,False
+BA,ES,ES,False
+ES_1P1,ES,ES,False
+ES_MULAMBDA,ES,ES,False
+FA,ES,ES,False
+GWO,ES,PSO,True
+MFO,ES,ES,False
+PSO_GBEST,PSO,PSO,False
+PSO_RING,PSO,PSO,False
+WOA,PSO,PSO,False

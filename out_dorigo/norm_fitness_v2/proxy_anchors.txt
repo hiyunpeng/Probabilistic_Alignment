@@ -1,4 +1,0 @@
-PROXY mode selected anchors from current algorithms.
-PSO_proxy (delayed takeoff): BA
-ES_proxy (smooth monotone * headroom): WOA
-IMPORTANT: These are proxies for exploratory analysis only, not real PSO/ES anchors.
